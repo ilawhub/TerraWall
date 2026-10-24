@@ -84,5 +84,3 @@ Cache: `~/Library/Application Support/EarthWallpaper/cache/`
 ## License
 
 MIT License. See [LICENSE](LICENSE).
-*（内容由AI生成，仅供参考）*
-*（内容由AI生成，仅供参考）*
