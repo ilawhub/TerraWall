@@ -4,14 +4,22 @@ A lightweight macOS app that fetches the latest full-disk imagery of Earth from 
 GOES-19 geostationary satellite, auto-crops it to your screen ratio, applies visual
 enhancement, and sets it as your desktop wallpaper — every 10 minutes.
 
-Inspired by "即刻地球" (JiKe Earth, a discontinued macOS wallpaper app by Tencent Lemon).
-This is an **independent re-implementation**, not affiliated with or endorsed by Tencent
-or RedBlack. The original app is no longer available and its data source
-(Himawari-8 satellite) was decommissioned in 2022; this project uses NOAA public data.
+Inspired by "即刻地球" (JiKe Earth), a classic macOS wallpaper app that is no longer
+available. This project uses NOAA public satellite data.
 
-> 中文说明：实时地球壁纸轻量版。
-> 受腾讯柠檬「即刻地球」启发、独立开发的替代实现，
-> 与腾讯/RedBlack 无任何关联，非官方产品。
+> 中文说明：实时地球壁纸轻量版，灵感源自「即刻地球」。
+
+## Preview
+
+Real-time Earth imagery from NOAA GOES satellites and classic NASA Earth photos,
+all public-domain sources.
+
+![GOES-19 Full Disk (Americas)](docs/preview-goes19-fd.jpg)
+![GOES-18 Full Disk (Pacific)](docs/preview-goes18-fd.jpg)
+![GOES-19 CONUS](docs/preview-goes19-conus.jpg)
+![GOES-18 CONUS](docs/preview-goes18-conus.jpg)
+![NASA Blue Marble](docs/preview-blue-marble.jpg)
+![NASA Earth at Night](docs/preview-earth-night.jpg)
 
 ## Features
 
