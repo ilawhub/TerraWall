@@ -4,8 +4,7 @@ A lightweight macOS app that fetches the latest full-disk imagery of Earth from 
 GOES-19 geostationary satellite, auto-crops it to your screen ratio, applies visual
 enhancement, and sets it as your desktop wallpaper — every 10 minutes.
 
-Inspired by "即刻地球" (JiKe Earth), a classic macOS wallpaper app that is still
-usable but no longer updated. This project uses NOAA public satellite data.
+Inspired by "即刻地球" (JiKe Earth). This project uses NOAA public satellite data.
 
 ## Preview
 
