@@ -4,15 +4,13 @@ A lightweight macOS app that fetches the latest full-disk imagery of Earth from 
 GOES-19 geostationary satellite, auto-crops it to your screen ratio, applies visual
 enhancement, and sets it as your desktop wallpaper — every 10 minutes.
 
-Inspired by "即刻地球" (JiKe Earth), a classic macOS wallpaper app that is no longer
-available. This project uses NOAA public satellite data.
-
-> 中文说明：实时地球壁纸轻量版，灵感源自「即刻地球」。
+Inspired by "即刻地球" (JiKe Earth), a classic macOS wallpaper app that is still
+usable but no longer updated. This project uses NOAA public satellite data.
 
 ## Preview
 
-Real-time Earth imagery from NOAA GOES satellites and classic NASA Earth photos,
-all public-domain sources.
+Real-time Earth imagery from NOAA GOES satellites, classic NASA Earth photos,
+and JMA Himawari-9 Asia-Pacific full-disk views, all public-domain sources.
 
 ![GOES-19 Full Disk (Americas)](docs/preview-goes19-fd.jpg)
 ![GOES-18 Full Disk (Pacific)](docs/preview-goes18-fd.jpg)
@@ -20,6 +18,18 @@ all public-domain sources.
 ![GOES-18 CONUS](docs/preview-goes18-conus.jpg)
 ![NASA Blue Marble](docs/preview-blue-marble.jpg)
 ![NASA Earth at Night](docs/preview-earth-night.jpg)
+
+### Asia-Pacific (Himawari-9)
+
+- **Himawari-9 composite (Asia view)** — NASA Blue Marble base + Himawari-9 real-time cloud overlay, updated hourly. Source: NII Digital Typhoon (National Institute of Informatics, Japan).
+- **Himawari-9 Visible B03 full disk** — updated every 10 minutes. Source: himawari.asia mirror.
+- **Himawari-9 Infrared B16 full disk** — updated every 10 minutes. Source: himawari.asia mirror.
+- **Himawari-9 IR false-color full disk** — updated hourly. Source: NII Digital Typhoon.
+
+![Himawari-9 Composite (Asia)](docs/earth_asia_agora.jpg)
+![Himawari-9 Visible B03](docs/himawari9_visible.png)
+![Himawari-9 Infrared B16](docs/himawari9_ir_b16.png)
+![Himawari-9 IR False-color](docs/himawari9_ir_512.jpg)
 
 ## Features
 
