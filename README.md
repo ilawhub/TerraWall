@@ -9,7 +9,8 @@ This is an **independent re-implementation**, not affiliated with or endorsed by
 or RedBlack. The original app is no longer available and its data source
 (Himawari-8 satellite) was decommissioned in 2022; this project uses NOAA public data.
 
-> 中文说明：实时地球壁纸轻量版。受腾讯柠檬「即刻地球」启发、独立开发的替代实现，
+> 中文说明：实时地球壁纸轻量版。
+> 受腾讯柠檬「即刻地球」启发、独立开发的替代实现，
 > 与腾讯/RedBlack 无任何关联，非官方产品。
 
 ## Features
@@ -84,5 +85,3 @@ Cache: `~/Library/Application Support/EarthWallpaper/cache/`
 ## License
 
 MIT License. See [LICENSE](LICENSE).
-*（内容由AI生成，仅供参考）*
-*（内容由AI生成，仅供参考）*
