@@ -16,7 +16,8 @@ Himawari-9 亚洲视角影像（可见光/合成图/红外）与 NASA 静态地�
   python3 earth_wallpaper.py --interval 10         # 前台每 10 分钟循环更新
   python3 earth_wallpaper.py --install             # 注册后台任务（每 10 分钟一次）
   python3 earth_wallpaper.py --uninstall           # 移除后台任务
-  python3 earth_wallpaper.py --source goes18       # 切换数据源（goes19/goes18/goes16/himawari9/agora/bluemarble/night）
+  python3 earth_wallpaper.py --source goes18       # 指定球体源（完整球体模式，不达标自动降级）
+  python3 earth_wallpaper.py --source bluemarble   # 显式指定非球体源（尊重用户选择）
   python3 earth_wallpaper.py --check               # 只检查数据源连通性，不换壁纸
   python3 earth_wallpaper.py --list-cache          # 查看缓存
   python3 earth_wallpaper.py --clear-cache         # 清空缓存
@@ -28,11 +29,14 @@ import glob
 import json
 import os
 import plistlib
+import random
 import re
 import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
+import urllib.request
 
 # 可选视觉增强：已安装 Pillow 时启用自动色阶/饱和度/锐化渲染；
 # 未安装则保持零依赖，仅做裁剪缩放（功能不受影响）。
@@ -84,6 +88,18 @@ SOURCES = {
         "name": "NASA 地球夜景（静态图，3600x1800）",
         "url": "https://eoimages.gsfc.nasa.gov/images/imagerecords/79000/79765/dnb_land_ocean_ice.2012.3600x1800.jpg",
     },
+    "planets": {
+        "name": "NASA Images API（行星/星云图库，随机关键词 + 随机选图）",
+        "url": None,  # 动态解析，见 resolve_source_url()
+    },
+    "moon": {
+        "name": "NASA Images API（月球影像库，LRO / Apollo 任务图等）",
+        "url": None,  # 动态解析，见 resolve_source_url()
+    },
+    "sun": {
+        "name": "NASA SDO 太阳动力学天文台实时 171Å 图（4096x4096，Public Domain）",
+        "url": "https://sdo.gsfc.nasa.gov/assets/img/latest/latest_4096_0171.jpg",
+    },
 }
 
 DEFAULT_INTERVAL = 10  # 分钟
@@ -94,6 +110,26 @@ DEFAULT_INTERVAL = 10  # 分钟
 SOURCE_PRIORITY = [
     "goes19", "goes18", "goes16", "himawari9", "agora",
     "bluemarble", "night",
+]
+
+# 完整球体源（卫星全盘 Full Disk 图：圆形地球居中 + 四周太空黑边）。
+# 只有这些源能保证"完整地球球体"视觉效果；其余为区域合成或平面投影。
+FULL_DISK_SOURCES = ("goes19", "goes18", "goes16", "himawari9")
+NON_DISK_SOURCES = ("agora", "bluemarble", "night")
+
+# 太阳圆盘源（SDO 4096x4096 方形 + 圆盘居中 + 四角太空黑，
+# 与地球全盘图同构，沿用球体检测与"保圆盘 + 黑边"裁剪模式）。
+SOLAR_DISK_SOURCES = ("sun",)
+
+# NASA 影像库非球体源：跳过球体检测，保留质量评分。
+PLANET_SOURCES = ("planets", "moon")
+
+# NASA Images API 关键词池（planets 随机抽取；moon 固定用 moon）
+NASA_IMAGES_API = "https://images-api.nasa.gov/search"
+PLANET_KEYWORDS = [
+    "jupiter", "mars", "saturn", "neptune", "uranus",
+    "venus", "mercury", "pluto",
+    "nebula", "galaxy", "andromeda",
 ]
 
 
@@ -173,58 +209,120 @@ def download_image(url, dest):
       2) JPEG 文件末尾必须是 EOI 标记 FF D9（截断的 JPEG 通常缺失该标记）；
       3) 安装了 Pillow 时用 Image.load() 完整解码验证（能真正读完整图）。
     任一校验失败即视为损坏：删除文件、记录日志并返回 False。
+    NASA CDN 偶发连接重置（curl 56），失败后自动重试一次再判定。
     """
-    # 用 -w 输出实际下载字节与响应头 Content-Length，供后续比对
-    rc, out = run_cmd(
-        ["curl", "-sL", "--fail", "--max-time", "180", "-o", dest,
-         "-w", "\\n__EW_DL__%{size_download}__EW_CL__%{size_header}", url],
-        timeout=200,
-    )
+    def _try_once():
+        # 用 -w 输出实际下载字节与响应头 Content-Length，供后续比对
+        rc, out = run_cmd(
+            ["curl", "-sL", "--fail", "--max-time", "180", "-o", dest,
+             "-w", "\\n__EW_DL__%{size_download}__EW_CL__%{size_header}", url],
+            timeout=200,
+        )
+        ok = False
+        length_ok = eoi_ok = pil_ok = True
+        if os.path.exists(dest) and os.path.getsize(dest) > 0:
+            # 1) 长度比对：服务器声明了 Content-Length（>0）时，下载量必须不小于它
+            m = re.search(r"__EW_DL__(\d+)__EW_CL__(\d+)", out)
+            length_ok = True
+            if m:
+                size_download = int(m.group(1))
+                content_length = int(m.group(2))
+                if content_length > 0 and size_download < content_length:
+                    length_ok = False
 
-    ok = False
-    length_ok = eoi_ok = pil_ok = True
-    if os.path.exists(dest) and os.path.getsize(dest) > 0:
-        # 1) 长度比对：服务器声明了 Content-Length（>0）时，下载量必须不小于它
-        m = re.search(r"__EW_DL__(\d+)__EW_CL__(\d+)", out)
-        length_ok = True
-        if m:
-            size_download = int(m.group(1))
-            content_length = int(m.group(2))
-            if content_length > 0 and size_download < content_length:
-                length_ok = False
-
-        # 2) JPEG EOI 标记检查
-        eoi_ok = False
-        try:
-            with open(dest, "rb") as fh:
-                fh.seek(0, os.SEEK_END)
-                if fh.tell() >= 4:
-                    fh.seek(-2, os.SEEK_END)
-                    eoi_ok = fh.read(2) == b"\xff\xd9"
-        except OSError:
+            # 2) JPEG EOI 标记检查
             eoi_ok = False
-
-        # 3) PIL 完整解码验证（可用时）
-        pil_ok = True
-        if HAVE_PIL:
             try:
-                im = Image.open(dest)
-                im.load()
-            except Exception:
-                pil_ok = False
+                with open(dest, "rb") as fh:
+                    fh.seek(0, os.SEEK_END)
+                    if fh.tell() >= 4:
+                        fh.seek(-2, os.SEEK_END)
+                        eoi_ok = fh.read(2) == b"\xff\xd9"
+            except OSError:
+                eoi_ok = False
 
-        ok = length_ok and eoi_ok and pil_ok
+            # 3) PIL 完整解码验证（可用时）
+            pil_ok = True
+            if HAVE_PIL:
+                try:
+                    im = Image.open(dest)
+                    im.load()
+                except Exception:
+                    pil_ok = False
 
-    if not ok:
-        try:
-            os.remove(dest)
-        except OSError:
-            pass
+            ok = length_ok and eoi_ok and pil_ok
+
+        if not ok:
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
+        return ok, rc, out, length_ok, eoi_ok, pil_ok
+
+    for attempt in (1, 2):
+        ok, rc, out, length_ok, eoi_ok, pil_ok = _try_once()
+        if ok:
+            return True
+        if attempt == 1:
+            log("下载失败（第 1 次，将重试）: {}".format(
+                out.strip().splitlines()[0] if out.strip() else "无响应"))
+            time.sleep(2)
+            continue
         log("下载失败/校验不通过: {}（curl 退出码 {}，长度校验 {}，EOI {}，PIL {}）".format(
             out.strip().splitlines()[0] if out.strip() else "无响应",
             rc, length_ok, eoi_ok, "skip" if not HAVE_PIL else ("ok" if pil_ok else "fail")))
-        return False
-    return True
+    return False
+
+
+def nasa_pick_url(keyword, rng):
+    """调用 NASA Images API 搜索 keyword，随机返回一张图的 ~orig.jpg 直链。
+
+    返回 (url, title)。API 返回的 links[0].href 是 ~thumb.jpg 缩略图；
+    NASA 资产命名规律为 images-assets.nasa.gov/image/<id>/<id>~orig.jpg，
+    直接拼接原图直链（经实测可用；~medium.jpg 会 403）。
+    零第三方依赖：仅用 urllib + json 解析。
+    """
+    qs = urllib.parse.urlencode({
+        "q": keyword, "media_type": "image", "page_size": 30,
+    })
+    req = urllib.request.Request(
+        NASA_IMAGES_API + "?" + qs,
+        headers={"User-Agent": "TerraWall/1.0 (macOS wallpaper)"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError("NASA Images API 请求失败（keyword={}）: {}".format(
+            keyword, exc))
+
+    items = data.get("collection", {}).get("items") or []
+    valid = [
+        it for it in items
+        if it.get("links") and it["links"][0].get("href")
+        and it.get("data") and it["data"][0].get("nasa_id")
+    ]
+    if not valid:
+        raise RuntimeError(
+            "NASA Images API 无有效结果（keyword={}）".format(keyword))
+    it = rng.choice(valid)
+    nasa_id = it["data"][0]["nasa_id"]
+    title = it["data"][0].get("title") or nasa_id
+
+    # links 数组包含多个尺寸（~small/~thumb/~medium/~large/~orig）。
+    # 优先中等分辨率直链（~large/~medium），避免超大 ~orig 图下载慢、易失败；
+    # 只有 small/thumb/orig 的资产才回退到 ~orig.jpg。
+    hrefs = [l.get("href", "") for l in it.get("links", [])]
+    picked = None
+    for size in ("~large.jpg", "~medium.jpg", "~orig.jpg"):
+        cand = next((h for h in hrefs if h.endswith(size)), None)
+        if cand:
+            picked = cand
+            break
+    if not picked:
+        href = next((h for h in hrefs if h), "")
+        picked = href.rsplit("~", 1)[0] + "~orig.jpg"
+    return picked, title
 
 
 def resolve_source_url(source_key, cfg):
@@ -232,9 +330,19 @@ def resolve_source_url(source_key, cfg):
 
     himawari9 的帧地址是动态的：先请求 latest.json 获取最新帧的
     date 字段（形如 "2026-10-24 13:50:00"），解析出 YYYY/MM/DD/HHMMSS
-    拼出帧 URL（https://himawari.asia/img/FULL_24h/B03/1d/550/YYYY/MM/DD/HHMMSS_0_0.png）。
+    拼出帧 URL（https://himawari.asia/img/D531106/1d/550/YYYY/MM/DD/HHMMSS_0_0.png）。
+    planets/moon 走 NASA Images API：随机关键词 + 随机选一张图，拼原图直链。
+    sun 为固定 SDO 实时图。
     网络异常或 JSON 解析失败时抛出 RuntimeError 并给出明确原因。
     """
+    if source_key in ("planets", "moon"):
+        rng = random.Random()
+        keyword = rng.choice(PLANET_KEYWORDS) if source_key == "planets" else "moon"
+        url, title = nasa_pick_url(keyword, rng)
+        log("{}: NASA Images API 命中「{}」-> {}（{}）".format(
+            source_key, keyword, title, url.rsplit("/", 1)[-1]))
+        return url
+
     if source_key != "himawari9":
         return cfg["url"]
 
@@ -264,7 +372,7 @@ def resolve_source_url(source_key, cfg):
 
     # 按 date 解析出的 HHMMSS 拼帧名（示例：135000_0_0.png）
     frame = "{}_0_0.png".format(dt.strftime("%H%M%S"))
-    url = "https://himawari.asia/img/FULL_24h/B03/1d/550/{}/{}/{}/{}".format(
+    url = "https://himawari.asia/img/D531106/1d/550/{}/{}/{}/{}".format(
         dt.strftime("%Y"), dt.strftime("%m"), dt.strftime("%d"), frame
     )
     return url
@@ -280,15 +388,20 @@ def latest_cache():
     return max(files, key=os.path.getmtime)
 
 
-def crop_to_screen(src, dst, dw, dh):
+def crop_to_screen(src, dst, dw, dh, keep_disk=False):
     """用 sips 将卫星图中心裁剪为屏幕比例并缩放至目标分辨率。
 
-    裁剪方向按源图宽高比与屏幕比判定：
+    keep_disk=False（默认）：按源图宽高比与屏幕比判定裁剪方向：
       - 源图更方/更窄（src_ratio <= ratio）：裁高（保留全宽，裁掉上下），
         如 10848x10848 方形源图 -> 高 10848/1.538≈7053，比例匹配屏幕；
       - 源图更宽（src_ratio > ratio）：裁宽（保留全高，裁掉左右）。
-    任何情况下若计算出的裁剪尺寸超出源图边界（越界保护），则放弃裁剪，
-    回退为整图等比缩放到目标分辨率，避免 sips 用填充色补齐产生灰块。
+      任何情况下若计算出的裁剪尺寸超出源图边界（越界保护），则放弃裁剪，
+      回退为整图等比缩放到目标分辨率，避免 sips 用填充色补齐产生灰块。
+
+    keep_disk=True（完整球体模式）：不再裁切画面，改为整图等比缩放保留
+    完整地球圆盘，宽度不足部分用太空黑（0,0,0）左右填充，得到
+    "中央完整圆形地球 + 四周太空" 的宽屏壁纸。需 Pillow 合成；无 Pillow
+    或等比后宽度超出目标时回退普通裁剪。
     """
     # 读取源图尺寸
     rc, out = run_cmd(["sips", "-g", "pixelWidth", "-g", "pixelHeight", src])
@@ -302,6 +415,25 @@ def crop_to_screen(src, dst, dw, dh):
     if not sw or not sh:
         log("无法读取源图尺寸: {}".format(out))
         return False
+
+    # 完整球体模式：保圆盘完整，黑边填充
+    if keep_disk:
+        target_w = int(round(sw * dh / float(sh)))
+        if target_w > dw:
+            log("完整球体保留模式等比后宽度超出（{}>{}），回退普通裁剪"
+                .format(target_w, dw))
+        elif HAVE_PIL:
+            try:
+                im = Image.open(src).convert("RGB")
+                scaled = im.resize((target_w, dh), Image.LANCZOS)
+                canvas = Image.new("RGB", (dw, dh), (0, 0, 0))
+                canvas.paste(scaled, ((dw - target_w) // 2, 0))
+                canvas.save(dst, "JPEG", quality=92)
+                return True
+            except Exception as exc:
+                log("完整球体保留模式合成失败（{}），回退普通裁剪".format(exc))
+        else:
+            log("Pillow 不可用，完整球体保留模式回退普通裁剪")
 
     ratio = dw / dh
     src_ratio = sw / sh
@@ -498,23 +630,112 @@ def score_image(path):
 SCORE_THRESHOLD = 60  # 质量评分合格线
 
 
-def update_wallpaper(source_key):
-    """执行一次完整更新：下载 -> 质量评分 -> 裁剪 -> 设壁纸。返回是否成功。
+def detect_full_disk(path):
+    """检测图片是否呈现完整地球圆盘（卫星全盘图特征）。
 
-    从指定源开始，按 SOURCE_PRIORITY 自动降级：下载失败/校验失败/质量评分
-    不达标时依次尝试下一个数据源；全部不达标则保留现有壁纸并跳过本次更新。
+    基于降采样缩略图的像素分布，返回 (is_disk, detail)：
+      1) 四角太空黑：4 个角落区域（每边 10%）非黑像素占比 < 25% 的角至少 3 个
+         —— 全盘图圆盘内切于画面、四角为太空黑；平面投影/区域图四角有内容。
+      2) 方形画面：源图宽高比 0.9~1.1
+         —— 卫星全盘图为正方形画布（GOES 10848x10848、Himawari 550x550）；
+         平面投影/区域图为矩形（Blue Marble 2:1、agora 4:3）。
+      3) 主体居中：非黑像素质心位于画面中心 ±35%
+         —— 圆盘整体居中；GOES/Himawari 云与陆海亮度不均会使质心略偏
+         （如 Himawari 可见光海洋暗、亮内容偏左），±35% 容忍自然偏移；
+         靠边裁剪/残图会被排除。
+      4) 圆盘占比合理：非黑像素占比 10%~92%
+         —— 内切圆约 78.5%，但 GEOCOLOR 圆盘带太空暗晕（35%~50% 属正常），
+         Himawari 可见光海洋偏暗（约 17%），均算完整球体；整图铺满内容
+         接近 100% 的矩形图已被第 2 条排除。
+    四项全部满足判定为完整球体；Pillow 不可用或解码失败时放行（避免误杀）。
+    """
+    if not HAVE_PIL:
+        return True, "Pillow 不可用，跳过球体检测"
+    try:
+        im = Image.open(path).convert("RGB")
+        w, h = im.size
+        tw = min(w, 200)
+        th = max(1, int(round(h * tw / w)))
+        thumb = im.resize((tw, th), Image.LANCZOS)
+    except Exception as exc:
+        return False, "图片无法解码: {}".format(exc)
+
+    px = list(thumb.getdata())
+    n = tw * th
+    # 亮度掩码：>30 视为可见内容（太空黑亮度极低）
+    mask = [((r * 299 + g * 587 + b * 114) // 1000) > 30 for r, g, b in px]
+    non_dark = sum(mask)
+    if non_dark == 0:
+        return False, "无可见主体（几乎全黑）"
+    share = non_dark / float(n)
+
+    # 四角区域（每边 10%）
+    cs_w = max(2, tw // 10)
+    cs_h = max(2, th // 10)
+    corners = []
+    for x0, y0 in ((0, 0), (tw - cs_w, 0), (0, th - cs_h), (tw - cs_w, th - cs_h)):
+        cnt = tot = 0
+        for yy in range(y0, min(y0 + cs_h, th)):
+            start = yy * tw + x0
+            end = start + cs_w
+            cnt += sum(mask[start:end])
+            tot += end - start
+        corners.append(cnt / float(tot) if tot else 1.0)
+    black_corners = sum(1 for c in corners if c < 0.25)
+
+    # 非黑像素质心（居中判定）
+    xs = [i % tw for i, m in enumerate(mask) if m]
+    ys = [i // tw for i, m in enumerate(mask) if m]
+    cx = sum(xs) / float(len(xs)) / tw
+    cy = sum(ys) / float(len(ys)) / th
+    centered = abs(cx - 0.5) < 0.35 and abs(cy - 0.5) < 0.35
+
+    # 画面宽高比（方形画布是全盘图特征）
+    frame_aspect = w / float(h)
+
+    is_disk = (black_corners >= 3
+               and 0.9 <= frame_aspect <= 1.1
+               and centered
+               and 0.10 <= share <= 0.92)
+    detail = "四角黑 {}/4，画面比例 {:.2f}，非黑占比 {:.1%}，质心 ({:.2f},{:.2f})".format(
+        black_corners, frame_aspect, share, cx, cy)
+    return is_disk, detail
+
+
+def update_wallpaper(source_key):
+    """执行一次完整更新：下载 -> 球体检测 -> 质量评分 -> 裁剪 -> 设壁纸。返回是否成功。
+
+    - source_key 为 None（默认）或球体源（goes19/18/16、himawari9）时进入
+      "完整球体模式"：只从球体源按优先级尝试，每张图强制通过球体检测，
+      不达标自动降级到下一个球体源；全部不达标则保留现有壁纸并跳过本次更新。
+    - 用户显式指定非球体源（agora/bluemarble/night）时尊重用户选择：
+      仅使用该源，跳过球体检测（仍做质量评分），失败则保留现有壁纸。
     """
     os.makedirs(CACHE_DIR, exist_ok=True)
 
-    if source_key not in SOURCES:
+    if source_key is None:
+        # 默认：完整球体模式，全部球体源按优先级
+        ordered = [k for k in SOURCE_PRIORITY if k in FULL_DISK_SOURCES]
+        force_disk = True
+    elif source_key in FULL_DISK_SOURCES:
+        # 指定球体源：从该源开始（只降级到其他球体源），强制球体检测
+        idx = SOURCE_PRIORITY.index(source_key)
+        ordered = [k for k in SOURCE_PRIORITY[idx:]
+                   if k in FULL_DISK_SOURCES]
+        ordered += [k for k in SOURCE_PRIORITY[:idx]
+                    if k in FULL_DISK_SOURCES]
+        force_disk = True
+    elif source_key in SOLAR_DISK_SOURCES:
+        # 太阳圆盘源（SDO）：单源，沿用球体检测与保圆盘裁剪
+        ordered = [source_key]
+        force_disk = True
+    elif source_key in NON_DISK_SOURCES or source_key in PLANET_SOURCES:
+        # 显式指定非球体源：尊重用户，仅用该源
+        ordered = [source_key]
+        force_disk = False
+    else:
         log("未知数据源: {}".format(source_key))
         return False
-    # 从指定源开始的优先级序列（不回头尝试更靠前的源）
-    if source_key in SOURCE_PRIORITY:
-        idx = SOURCE_PRIORITY.index(source_key)
-        ordered = SOURCE_PRIORITY[idx:] + SOURCE_PRIORITY[:idx]
-    else:
-        ordered = [source_key] + [k for k in SOURCE_PRIORITY if k != source_key]
 
     # 探测屏幕分辨率（物理像素，Retina 感知；仅一次，各源共用）
     res = screen_resolution()
@@ -543,7 +764,19 @@ def update_wallpaper(source_key):
         if not download_image(url, raw):
             continue
 
-        # 2. 质量评分：排除损坏/灰块/过暗过曝/单调/无地球主体的图
+        # 2. 球体检测（仅完整球体模式）：非球体图直接降级，保证壁纸是完整地球
+        if force_disk:
+            is_disk, disk_detail = detect_full_disk(raw)
+            if not is_disk:
+                log("{} 非完整球体（{}），降级下一源".format(key, disk_detail))
+                try:
+                    os.remove(raw)
+                except OSError:
+                    pass
+                continue
+            log("{} 完整球体检测通过: {}".format(key, disk_detail))
+
+        # 3. 质量评分：排除损坏/灰块/过暗过曝/单调/无地球主体的图
         score, reasons = score_image(raw)
         if reasons:
             log("{} 质量不合格（{}分）: {}".format(
@@ -555,8 +788,8 @@ def update_wallpaper(source_key):
             continue
         log("{} 质量评分通过: {}分".format(key, score))
 
-        # 3. 裁剪并缩放至屏幕分辨率
-        if not crop_to_screen(raw, final, dw, dh):
+        # 4. 裁剪并缩放至屏幕分辨率（球体模式保圆盘完整+黑边，非球体模式普通裁剪）
+        if not crop_to_screen(raw, final, dw, dh, keep_disk=force_disk):
             for p in (raw, final):
                 try:
                     os.remove(p)
@@ -566,12 +799,12 @@ def update_wallpaper(source_key):
         if enhance_image(final):
             log("已完成视觉增强渲染")
 
-        # 4. 设置壁纸
+        # 5. 设置壁纸
         if not set_wallpaper(final):
             return False
         log("壁纸已更新: {}".format(final))
 
-        # 5. 清理旧文件（保留最近 3 份原始图和 5 份成品）
+        # 6. 清理旧文件（保留最近 3 份原始图和 5 份成品）
         for kind, keep in (("raw_*", 3), ("wall_*", 5)):
             files = sorted(glob.glob(os.path.join(CACHE_DIR, kind)),
                            key=os.path.getmtime, reverse=True)
@@ -631,6 +864,19 @@ def check_sources():
         if key == "himawari9":
             url = cfg["meta_url"]
             extra = " [latest.json]"
+        elif key in ("planets", "moon"):
+            # 动态源：走 NASA Images API 解析出真实直链即视为连通
+            # （NASA CDN 对连续 HEAD 请求会限流 403，实际 GET 下载不受影响，
+            #  故此处不做 HEAD 探测）
+            try:
+                url = resolve_source_url(key, cfg)
+            except RuntimeError as exc:
+                print("{:<8} {}{} -> 不可用({})".format(
+                    key, cfg["name"], " [NASA API]", exc))
+                continue
+            print("{:<8} {}{} -> OK（直链 {}）".format(
+                key, cfg["name"], " [NASA API]", url.rsplit("/", 1)[-1]))
+            continue
         else:
             url = cfg["url"]
             extra = ""
@@ -652,9 +898,14 @@ def main():
     parser.add_argument("--once", action="store_true", help="立即更新一次壁纸")
     parser.add_argument("--interval", type=int, default=DEFAULT_INTERVAL,
                         help="前台循环更新的间隔分钟数（默认 10）")
-    parser.add_argument("--source", default="goes19",
+    parser.add_argument("--source", default=None,
                         choices=list(SOURCES.keys()),
-                        help="数据源（goes19/goes18/goes16/himawari9/agora/bluemarble/night）")
+                        help=("数据源。默认（不指定）进入完整球体模式：仅从球体源"
+                              "（goes19/goes18/goes16/himawari9）按优先级选择并强制"
+                              "通过球体检测，不达标自动降级。显式指定非球体源"
+                              "（agora/bluemarble/night/planets/moon）时尊重用户选择，"
+                              "仅用该源（planets 随机行星/星云图、moon 月球影像库）；"
+                              "sun 为 SDO 太阳实时圆盘图（沿用球体检测）。"))
     parser.add_argument("--install", action="store_true", help="注册后台定时任务")
     parser.add_argument("--uninstall", action="store_true", help="移除后台定时任务")
     parser.add_argument("--check", action="store_true", help="检查数据源连通性")

@@ -78,6 +78,9 @@ python3 earth_wallpaper.py --clear-cache   # clear cache
 | `agora` | Himawari-9 (NII) | Asia | Blue Marble base + real-time clouds, hourly |
 | `bluemarble` | NASA | Global | Static classic Earth, 5400x2700 |
 | `night` | NASA | Global | Static Earth night lights, 3600x1800 |
+| `planets` | NASA Images API | Solar system / deep sky | Random planet/galaxy keyword, random photo, full quality scoring |
+| `moon` | NASA Images API | Moon | Lunar imagery library (LRO / Apollo / GRAIL), full quality scoring |
+| `sun` | NASA SDO | Sun | Real-time 171Å solar disk, 4096x4096, Public Domain, disk-detection enabled |
 
 Switch source: `python3 earth_wallpaper.py --once --source goes18`
 
@@ -90,6 +93,15 @@ JMA Himawari-9 imagery is served via the `himawari.asia` mirror (visible B03,
 `agora.ex.nii.ac.jp` (Blue Marble + real-time cloud composite, hourly updates,
 plus IR false-color). NASA Earth imagery (`eoimages.gsfc.nasa.gov`) is in the
 public domain.
+
+Planets / Moon use the official NASA Images API (`images-api.nasa.gov`):
+each run picks a random keyword from a pool (jupiter / mars / saturn / neptune /
+uranus / nebula / galaxy / andromeda, plus moon for the lunar source), then
+picks a random photo and downloads its medium/large resolution direct link
+(`images-assets.nasa.gov`). The Sun source uses the Solar Dynamics Observatory
+live 171Å full-disk image from `sdo.gsfc.nasa.gov`; it is not a planet disk, so
+the script applies the same disk-detection and keep-disk cropping as Earth
+satellite imagery.
 
 The original app used JMA Himawari-8, whose public imagery endpoints are no
 longer available.
