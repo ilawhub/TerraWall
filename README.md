@@ -33,6 +33,7 @@ and JMA Himawari-9 Asia-Pacific full-disk views, all public-domain sources.
 ## Features
 
 - Real-time Earth wallpaper from NOAA GOES-19 full-disk GEOCOLOR imagery (10848x10848)
+- Multiple data sources: NOAA GOES (Americas / Pacific), JMA Himawari-9 (Asia-Pacific visible & IR), NII Digital Typhoon composite, and NASA static Earth imagery
 - Auto-adapts to your display: center-crop + resize to exact screen resolution
 - Optional visual enhancement: auto-contrast, saturation boost, mild sharpening (Pillow)
 - Offline fallback: uses the latest cached image when fetch fails or offline
@@ -73,13 +74,25 @@ python3 earth_wallpaper.py --clear-cache   # clear cache
 | `goes19` | GOES-19 | Americas / Atlantic | Default                   |
 | `goes18` | GOES-18 | W. Pacific / Americas | Alternative               |
 | `goes16` | GOES-16 | Americas / Atlantic | Alternative (redirects to GOES-19) |
+| `himawari9` | Himawari-9 | Asia / W. Pacific | Visible B03 full disk, ~10 min update, low-res (550x550) |
+| `agora` | Himawari-9 (NII) | Asia | Blue Marble base + real-time clouds, hourly |
+| `bluemarble` | NASA | Global | Static classic Earth, 5400x2700 |
+| `night` | NASA | Global | Static Earth night lights, 3600x1800 |
 
 Switch source: `python3 earth_wallpaper.py --once --source goes18`
 
 Imagery: NOAA GOES Series Full Disk GEOCOLOR, served by NOAA STAR
 (`cdn.star.nesdis.noaa.gov`). NOAA data is in the public domain; please attribute
-NOAA/NESDIS/STAR when redistributing. The original app used JMA Himawari-8, whose
-public imagery endpoints are no longer available.
+NOAA/NESDIS/STAR when redistributing.
+
+JMA Himawari-9 imagery is served via the `himawari.asia` mirror (visible B03,
+~10-minute updates) and the NII Digital Typhoon project at
+`agora.ex.nii.ac.jp` (Blue Marble + real-time cloud composite, hourly updates,
+plus IR false-color). NASA Earth imagery (`eoimages.gsfc.nasa.gov`) is in the
+public domain.
+
+The original app used JMA Himawari-8, whose public imagery endpoints are no
+longer available.
 
 ## Background Agent
 
